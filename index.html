@@ -73,6 +73,7 @@
         .delete-btn { background: var(--red); color: white; border: none; width: 26px; height: 26px; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: 0.2s; }
         .delete-btn:hover { background: #dc2626; transform: scale(1.1); }
         .bill-time { color: #475569; font-size: 0.85rem; display: inline-block; background: #f1f5f9; padding: 4px 8px; border-radius: 6px; border: 1px solid #cbd5e1; font-weight: 500; }
+        .bill-time-deleted { background: #fee2e2; border-color: #fca5a5; color: #991b1b; }
         .bill-thumb { width: 60px; height: 60px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); cursor: pointer; display: block; margin-top: 5px; }
         .toast { position: fixed; bottom: 30px; left: 30px; background: #1f2937; color: white; padding: 15px 25px; border-radius: 10px; display: flex; align-items: center; gap: 10px; transform: translateY(100px); opacity: 0; transition: all 0.4s; z-index: 1000; }
         .toast.show { transform: translateY(0); opacity: 1; }
@@ -187,6 +188,18 @@
                     <tbody id="bills-table-body"></tbody>
                 </table>
             </div>
+
+            <!-- سجل الفواتير المحذوفة -->
+            <div class="section">
+                <h2 class="section-header" style="color: var(--red);">
+                    <i class="fa-solid fa-trash-can"></i> أرشيف الفواتير المحذوفة
+                </h2>
+                <table>
+                    <thead><tr><th>حُذفت بواسطة</th><th>بيانات الفاتورة</th><th>توقيت الحذف / إجراء</th></tr></thead>
+                    <tbody id="deleted-bills-table-body"></tbody>
+                </table>
+            </div>
+
         </div>
     </div>
 </div>
@@ -225,7 +238,7 @@
     };
 
     let currentUser = null;
-    const defaultState = { expectedCash: 0, denominations: { 200:0, 100:0, 50:0, 20:0, 10:0, 5:0, 1:0 }, bills: [] };
+    const defaultState = { expectedCash: 0, denominations: { 200:0, 100:0, 50:0, 20:0, 10:0, 5:0, 1:0 }, bills: [], deletedBills: [] };
     let state = JSON.parse(JSON.stringify(defaultState));
     const denomsList = [200, 100, 50, 20, 10, 5, 1];
     const formatNum = (num) => Number(num).toLocaleString('en-US');
@@ -287,6 +300,7 @@
                 state = data;
                 if (!state.denominations) state.denominations = JSON.parse(JSON.stringify(defaultState.denominations));
                 if (!state.bills) state.bills = [];
+                if (!state.deletedBills) state.deletedBills = [];
             } else {
                 state = JSON.parse(JSON.stringify(defaultState));
             }
@@ -380,10 +394,37 @@
             return;
         }
 
-        if(confirm('هل أنت متأكد من حذف هذه الفاتورة؟')) {
+        if(confirm('هل أنت متأكد من حذف هذه الفاتورة؟ سيتم تحويلها للأرشيف.')) {
+            const billToDelete = state.bills.find(bill => bill.id === id);
+            
+            if (billToDelete) {
+                if (!state.deletedBills) state.deletedBills = [];
+                const now = new Date();
+                const deletedRecord = {
+                    ...billToDelete,
+                    deletedBy: currentUser,
+                    deletedAt: `يوم ${now.toLocaleDateString('ar-EG', { weekday: 'long' })} (${now.toLocaleDateString('en-GB')}) - الساعة ${now.toLocaleTimeString('ar-EG', { hour: '2-digit', minute:'2-digit' })}`
+                };
+                state.deletedBills.push(deletedRecord);
+            }
+
             state.bills = state.bills.filter(bill => bill.id !== id);
             saveAndSync();
-            showToast('تم حذف الفاتورة بنجاح');
+            showToast('تم حذف الفاتورة بنجاح وتسجيلها في الأرشيف');
+        }
+    }
+
+    // دالة جديدة مخصصة للحذف النهائي من الأرشيف
+    window.permanentDeleteBill = function(id) {
+        if (currentUser !== "Abdelkhalek") {
+            showToast('عفواً، صلاحية الحذف النهائي مقتصرة على Abdelkhalek فقط!', 'error');
+            return;
+        }
+
+        if(confirm('هل أنت متأكد من حذف هذه الفاتورة نهائياً من الأرشيف؟ (لا يمكن الاسترجاع)')) {
+            state.deletedBills = state.deletedBills.filter(bill => bill.id !== id);
+            saveAndSync();
+            showToast('تم الحذف النهائي بنجاح');
         }
     }
 
@@ -440,34 +481,72 @@
         const wrapper = document.getElementById('card-final-wrapper');
         wrapper.className = wrapperClass;
 
+        // تحديث جدول الفواتير الأساسي
         const tbody = document.getElementById('bills-table-body'); tbody.innerHTML = '';
-        if(!state.bills || state.bills.length === 0) return tbody.innerHTML = `<tr><td colspan="3" style="text-align: center;">لا توجد فواتير</td></tr>`;
-        
-        const grouped = {};
-        state.bills.forEach(b => { if(!grouped[b.name]) grouped[b.name] = { total: 0, items: [] }; grouped[b.name].items.push(b); grouped[b.name].total += b.amount; });
-        
-        for (const [name, data] of Object.entries(grouped)) {
-            let detailsHTML = data.items.map(b => {
-                const isChecked = b.includeInCalc !== false ? 'checked' : '';
-                return `
-                <div class="bill-item">
-                    <div class="bill-header-row">
-                        <div class="bill-time">${b.time}</div>
-                        <div class="bill-actions-left">
-                            <label style="font-size: 0.85rem; cursor: pointer; display: flex; align-items: center; gap: 4px;" title="حساب في الإجمالي">
-                                <input type="checkbox" class="calc-checkbox" ${isChecked} onchange="window.toggleBillCalc(${b.id}, this)"> حساب
-                            </label>
-                            <button class="delete-btn" onclick="window.deleteBill(${b.id}, '${b.name}')" title="حذف الفاتورة"><i class="fa-solid fa-xmark"></i></button>
+        if(!state.bills || state.bills.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="3" style="text-align: center;">لا توجد فواتير</td></tr>`;
+        } else {
+            const grouped = {};
+            state.bills.forEach(b => { if(!grouped[b.name]) grouped[b.name] = { total: 0, items: [] }; grouped[b.name].items.push(b); grouped[b.name].total += b.amount; });
+            
+            for (const [name, data] of Object.entries(grouped)) {
+                let detailsHTML = data.items.map(b => {
+                    const isChecked = b.includeInCalc !== false ? 'checked' : '';
+                    return `
+                    <div class="bill-item">
+                        <div class="bill-header-row">
+                            <div class="bill-time">${b.time}</div>
+                            <div class="bill-actions-left">
+                                <label style="font-size: 0.85rem; cursor: pointer; display: flex; align-items: center; gap: 4px;" title="حساب في الإجمالي">
+                                    <input type="checkbox" class="calc-checkbox" ${isChecked} onchange="window.toggleBillCalc(${b.id}, this)"> حساب
+                                </label>
+                                <button class="delete-btn" onclick="window.deleteBill(${b.id}, '${b.name}')" title="حذف الفاتورة"><i class="fa-solid fa-xmark"></i></button>
+                            </div>
                         </div>
-                    </div>
-                    <div><b>${b.reason}</b>: ${formatNum(b.amount)} ج.م</div>
+                        <div><b>${b.reason}</b>: ${formatNum(b.amount)} ج.م</div>
+                        ${b.image ? `<img src="${b.image}" class="bill-thumb" onclick="window.openImageModal('${b.image}')">` : ''}
+                    </div>`;
+                }).join('');
+                
+                const groupActiveTotal = data.items.filter(b => b.includeInCalc !== false).reduce((sum, item) => sum + item.amount, 0);
+                tbody.innerHTML += `<tr><td style="font-weight: bold;">${name}</td><td>${detailsHTML}</td><td style="font-weight: bold; color: var(--primary);">${formatNum(groupActiveTotal)} ج.م</td></tr>`;
+            }
+        }
+
+        // تحديث جدول الفواتير المحذوفة (الأرشيف)
+        const deletedTbody = document.getElementById('deleted-bills-table-body');
+        deletedTbody.innerHTML = '';
+        if(!state.deletedBills || state.deletedBills.length === 0) {
+            deletedTbody.innerHTML = `<tr><td colspan="3" style="text-align: center;">لا يوجد فواتير محذوفة</td></tr>`;
+        } else {
+            const reversedDeleted = [...state.deletedBills].reverse();
+            
+            reversedDeleted.forEach(b => {
+                const detailsHTML = `
+                <div style="font-size: 0.9rem; line-height: 1.6;">
+                    <div><b>الاسم:</b> ${b.name}</div>
+                    <div><b>السبب:</b> ${b.reason}</div>
+                    <div><b>المبلغ:</b> <span style="color:var(--primary); font-weight:bold;">${formatNum(b.amount)} ج.م</span></div>
+                    <div style="color:var(--text-muted); font-size: 0.8rem; margin-top: 5px;">وقت الإضافة الأصلي: ${b.time}</div>
                     ${b.image ? `<img src="${b.image}" class="bill-thumb" onclick="window.openImageModal('${b.image}')">` : ''}
                 </div>`;
-            }).join('');
-            
-            const groupActiveTotal = data.items.filter(b => b.includeInCalc !== false).reduce((sum, item) => sum + item.amount, 0);
 
-            tbody.innerHTML += `<tr><td style="font-weight: bold;">${name}</td><td>${detailsHTML}</td><td style="font-weight: bold; color: var(--primary);">${formatNum(groupActiveTotal)} ج.م</td></tr>`;
+                // زر الحذف النهائي (يظهر فقط لـ Abdelkhalek)
+                const deleteActionHTML = currentUser === "Abdelkhalek" ? 
+                    `<br><button class="btn btn-danger" style="padding: 5px 10px; font-size: 0.8rem; margin-top: 10px;" onclick="window.permanentDeleteBill(${b.id})"><i class="fa-solid fa-trash"></i> حذف نهائي</button>` : '';
+
+                deletedTbody.innerHTML += `
+                <tr>
+                    <td style="font-weight: bold; color: var(--red); vertical-align: middle;">
+                        <i class="fa-solid fa-user-xmark"></i> ${b.deletedBy}
+                    </td>
+                    <td>${detailsHTML}</td>
+                    <td style="vertical-align: middle;">
+                        <span class="bill-time bill-time-deleted">${b.deletedAt}</span>
+                        ${deleteActionHTML}
+                    </td>
+                </tr>`;
+            });
         }
     }
 
